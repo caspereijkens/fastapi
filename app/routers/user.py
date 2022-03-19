@@ -1,7 +1,7 @@
-from fastapi import FastAPI, Response, status, HTTPException, Depends, APIRouter
-from .. import schemas, utils
-from ..database import conn, cursor
-from psycopg2.errors import UniqueViolation
+from fastapi import status, HTTPException, APIRouter, Depends
+from .. import schemas, utils, models
+from ..database import get_db
+from sqlalchemy.orm import Session
 
 
 router = APIRouter(
@@ -11,37 +11,22 @@ router = APIRouter(
 
 
 @router.post("/", status_code=status.HTTP_201_CREATED, response_model=schemas.UserOut)
-def create_user(user: schemas.UserCreate):
-    user.password = utils.hash(user.password)
-    try:
-        cursor.execute(
-            """
-            INSERT INTO users
-            (email, password)
-            VALUES
-            (%s, %s)
-            RETURNING *
-            """,
-            (user.email, user.password)
-        )
-    except UniqueViolation:
-        return Response(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
-    created_user = cursor.fetchone()
-    print(created_user)
-    conn.commit()
-    return created_user
+def create_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
+    # hash the password - user.password
+    hashed_password = utils.hash(user.password)
+    user.password = hashed_password
+
+    new_user = models.User(**user.dict())
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+
+    return new_user
 
 
 @router.get("/{id}", response_model=schemas.UserOut)
-def get_user(id: int):
-    cursor.execute(
-        """
-        SELECT * FROM users
-        WHERE id = %s;
-        """,
-        (str(id),)
-    )
-    user = cursor.fetchone()
+def get_user(id: int, db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.id == id).first()
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail=f"User with id {id} does not exist.")
